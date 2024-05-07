@@ -24,11 +24,23 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData.light(useMaterial3: true),
       initialRoute: '/',
+      // utilisé pour gérer les routes dynamiquement
+      onGenerateRoute: (settings) {
+        if (settings.name == '/register') {
+          final bool usingStandardPassword =
+              settings.arguments as bool? ?? false;
+          return MaterialPageRoute(
+            builder: (context) =>
+                Register(usingStandardPassword: usingStandardPassword),
+          );
+        }
+        // Ajouter ici d'autres gestionnaires de route si nécessaire
+        return null;
+      },
       routes: {
-        '/': (context) => const Retrieve(),
+        '/': (context) => const Welcome(),
         '/insured': (context) => const MapPage(),
         '/Forgotten_password': (context) => const Forgotten_password(),
-        '/register': (context) => const Register(),
         '/retrieve': (context) => const Retrieve(),
       },
     );

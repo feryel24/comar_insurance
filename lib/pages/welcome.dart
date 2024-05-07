@@ -1,8 +1,10 @@
-// ignore_for_file: non_constant_identifier_names, use_build_context_synchronously, unused_local_variable
+// ignore_for_file: non_constant_identifier_names, use_build_context_synchronously, unused_local_variable, avoid_print
 //import 'dart:html';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:comar_insurance/shared/snackbar.dart';
+//import 'package:cloud_firestore/cloud_firestore.dart';
+//import 'package:comar_insurance/shared/snackbar.dart';
+import 'package:comar_insurance/pages/insured.dart';
+import 'package:comar_insurance/pages/register.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -14,53 +16,81 @@ class Welcome extends StatefulWidget {
 }
 
 class _WelcomeState extends State<Welcome> {
+  bool usingStandardPassword = false;
+
   bool isVisible = true;
-  final usernameController = TextEditingController();
+  final emailController = TextEditingController();
   final passwordController = TextEditingController();
 
-  Future<void> signIn(BuildContext context) async {
-    final username = usernameController.text;
-    final password = passwordController.text;
+  void showSnackbar(BuildContext context, String message) {
+    final snackBar = SnackBar(
+      content: Text(message),
+      duration: Duration(seconds: 3),
+    );
+    ScaffoldMessenger.of(context).showSnackBar(snackBar);
+  }
 
-    // Assurez-vous que les champs ne sont pas vides
-    if (username.isEmpty || password.isEmpty) {
-      showSnackBar(context, "Please retry with valid informations!");
+  String handleError(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'auth/user-not-found':
+        return 'User not found, please contact our agency! THANKS.';
+      case 'auth/wrong-password':
+        return 'Incorrect password, try again.';
+      case 'auth/invalid-email':
+        return 'The email address is badly formatted.';
+      case 'auth/invalid-credential':
+        return 'User not found, please contact our agency! THANKS..';
+      default:
+        return 'An error occurred: ${e.message}';
+    }
+  }
+
+  Future<void> signIn(BuildContext context) async {
+    String enteredEmail = emailController.text.trim();
+    String enteredPassword = passwordController.text.trim();
+
+    if (enteredEmail.isEmpty || enteredPassword.isEmpty) {
+      showSnackbar(context, 'Please enter email and password');
       return;
     }
 
     try {
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection('userss')
-          .where('username', isEqualTo: username)
-          .get();
-
-      if (querySnapshot.docs.isEmpty) {
-        showSnackBar(context, "Please retry with valid informations!");
-        return;
-      }
-
-      final userDoc = querySnapshot.docs.first;
-      final email = userDoc.data()['email'] as String;
-
-      // Une autre vérification d'erreur pourrait être ici pour l'email null
-
-      final userCredential =
+      UserCredential userCredential =
           await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
+        email: enteredEmail,
+        password: enteredPassword,
       );
 
-      Navigator.pushNamed(context, '/insured');
-    } catch (e) {
-      // Vous pouvez affiner la gestion des exceptions en fonction du type d'erreur
-      print(e); // Pour le débogage
-      Navigator.pushNamed(context, '/register');
+      // Vérifier si le mot de passe utilisé est le mot de passe standard
+      if (enteredPassword == "123456") {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => Register(usingStandardPassword: true),
+          ),
+        );
+      } else {
+        // Redirigez vers MapPage si l'utilisateur a déjà mis à jour son mot de passe
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+              builder: (context) =>
+                  MapPage()), // Assurez-vous que MapPage est correctement défini
+        );
+      }
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'wrong-password') {
+        showSnackbar(context, 'Incorrect password, try again.');
+      } else {
+        // Gérer les autres erreurs potentielles
+        showSnackbar(context, handleError(e));
+      }
     }
   }
 
   @override
   void dispose() {
-    usernameController.dispose();
+    emailController.dispose();
     passwordController.dispose();
     super.dispose();
   }
@@ -127,18 +157,28 @@ class _WelcomeState extends State<Welcome> {
                   padding: const EdgeInsets.symmetric(horizontal: 24.0),
                   child: Column(
                     children: <Widget>[
-                      TextField(
-                        controller: usernameController,
+                      TextFormField(
+                        //we return "null" when something is valid
+                        validator: (email) {
+                          return email!.contains(RegExp(
+                                  r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_`{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+"))
+                              ? null
+                              : "Enter a valid email";
+                        },
+                        autovalidateMode: AutovalidateMode.onUserInteraction,
+
+                        controller: emailController,
+                        keyboardType: TextInputType.emailAddress,
                         textInputAction: TextInputAction.next,
                         decoration: InputDecoration(
-                          labelText: 'Username : ',
+                          labelText: 'Enter Your Email : ',
                           focusedBorder: OutlineInputBorder(
                             borderSide: BorderSide(
                                 color: Colors.indigo[900]!), // Bordure en focus
                           ),
                           floatingLabelStyle:
                               TextStyle(color: Colors.indigo[900]!),
-                          prefixIcon: const Icon(Icons.person),
+                          prefixIcon: const Icon(Icons.email),
                           border: const OutlineInputBorder(),
                         ),
                       ),

@@ -39,7 +39,7 @@ class _MyWidgetState extends State<MapPage> {
   bool _isMalfunctionChecked = false;
   String? _selectedIssue = 'Battery failure';
 
-  CollectionReference users = FirebaseFirestore.instance.collection('asuré');
+  CollectionReference users = FirebaseFirestore.instance.collection('insured');
 
   Future<String> getAddressFromLatLng(LatLng position) async {
     try {
@@ -73,7 +73,7 @@ class _MyWidgetState extends State<MapPage> {
       // Si un utilisateur est connecté, obtenez son UID
       String uid = user.uid;
       CollectionReference users =
-          FirebaseFirestore.instance.collection('assuré');
+          FirebaseFirestore.instance.collection('insured');
       String formattedTime = _selectedTime != null
           ? formatTimeOfDay(_selectedTime!)
           : 'No time selected';

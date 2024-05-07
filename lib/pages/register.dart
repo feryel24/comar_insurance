@@ -5,7 +5,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 class Register extends StatefulWidget {
-  const Register({super.key});
+  //modification du constructeur
+  final bool usingStandardPassword;
+  // ignore: use_super_parameters
+  const Register({Key? key, required this.usingStandardPassword})
+      : super(key: key);
 
   @override
   State<Register> createState() => _RegisterState();
@@ -59,50 +63,60 @@ class _RegisterState extends State<Register> {
     });
   }
 
+  bool validatePassword(String password) {
+    return password.length >= 8 &&
+        password.contains(RegExp(r'[0-9]')) &&
+        password.contains(RegExp(r'[A-Z]')) &&
+        password.contains(RegExp(r'[a-z]')) &&
+        password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'));
+  }
+
   register() async {
     setState(() {
       isLoading = true;
     });
 
-    try {
-      final credential =
-          await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: emailController.text,
-        password: newPasswordController.text,
-      );
+    String newPassword = newPasswordController.text;
 
-      print(credential.user!.uid);
-
-//userss : name of ur collection
-//users : name of variable
-      CollectionReference users =
-          FirebaseFirestore.instance.collection('userss');
-      users
-          .doc(credential.user!.uid)
-          .set({
-            'username': usernameController.text,
-            'phoneNumbr': _phoneNumberController.text,
-            'email': emailController.text,
-            'insured': _isInsuredChecked,
-            'driver': _isDriverChecked,
-          })
-          .then((value) => print("User Added"))
-          .catchError((error) => print("Failed to add user: $error"));
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'weak-password') {
-        showSnackBar(context, "The password provided is too weak.");
-      } else if (e.code == 'email-already-in-use') {
-        showSnackBar(context, "The account already exists for that email.");
-      } else {
-        showSnackBar(context, "ERRO - Please try again late!");
-      }
-    } catch (err) {
-      showSnackBar(context, err.toString());
+    if (!widget.usingStandardPassword) {
+      showSnackBar(context, "This page is for updating passwords only.");
+      setState(() {
+        isLoading = false;
+      });
+      return;
     }
 
-    setState(() {
-      isLoading = false;
-    });
+    if (newPassword.isEmpty || !validatePassword(newPassword)) {
+      showSnackBar(context, "Please enter a valid password.");
+      setState(() {
+        isLoading = false;
+      });
+      return;
+    }
+
+    try {
+      User? user = FirebaseAuth.instance.currentUser;
+      await user?.updatePassword(newPassword);
+
+      // Utiliser set avec merge pour créer ou mettre à jour les informations de l'utilisateur
+      FirebaseFirestore.instance.collection('userss').doc(user?.uid).set({
+        'username': usernameController.text,
+        'phoneNumbr': _phoneNumberController.text,
+        'email': emailController.text,
+        'insured': _isInsuredChecked,
+        'driver': _isDriverChecked,
+      }, SetOptions(merge: true));
+
+      showSnackBar(context, "Password updated successfully!");
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (context) => Welcome()));
+    } catch (e) {
+      showSnackBar(context, "An error occurred: ${e.toString()}");
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
   }
 
   @override
@@ -161,32 +175,7 @@ class _RegisterState extends State<Register> {
                       ),
                       const SizedBox(height: 15.0),
                       //utilisation du textFormField for validation(controle de saisie)
-                      TextFormField(
-                        //we return "null" when something is valid
-                        validator: (email) {
-                          return email!.contains(RegExp(
-                                  r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_`{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+"))
-                              ? null
-                              : "Enter a valid email";
-                        },
-                        autovalidateMode: AutovalidateMode.onUserInteraction,
 
-                        controller: emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        textInputAction: TextInputAction.next,
-                        decoration: InputDecoration(
-                          labelText: 'Enter Your Email : ',
-                          focusedBorder: OutlineInputBorder(
-                            borderSide: BorderSide(
-                                color: Colors.indigo[900]!), // Bordure en focus
-                          ),
-                          floatingLabelStyle:
-                              TextStyle(color: Colors.indigo[900]!),
-                          prefixIcon: const Icon(Icons.email),
-                          border: const OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 15.0),
                       TextField(
                         controller: _phoneNumberController,
                         keyboardType: TextInputType.phone,
@@ -204,6 +193,7 @@ class _RegisterState extends State<Register> {
                         ),
                       ),
                       const SizedBox(height: 15.0),
+
                       TextFormField(
                         onChanged: (password) {
                           onPasswordChanged(password);
