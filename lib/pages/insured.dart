@@ -1,7 +1,8 @@
 // ignore_for_file: unused_field, unused_import, unused_local_variable, avoid_print, use_build_context_synchronously, invalid_return_type_for_catch_error
 
 import 'dart:async';
-
+import 'dart:convert';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:comar_insurance/pages/retrieve.dart';
 import 'package:flutter/material.dart';
@@ -9,99 +10,205 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:geocoding/geocoding.dart' hide Location;
+import 'package:geocoding/geocoding.dart' as geocoding;
 import 'package:intl/intl.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
 
   @override
-  State<MapPage> createState() => _MyWidgetState();
+  State<MapPage> createState() => _MapPageState();
 }
 
-class _MyWidgetState extends State<MapPage> {
+class _MapPageState extends State<MapPage> {
+  File? _image;
+  final picker = ImagePicker();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  Map<String, dynamic>? _userProfile;
   TimeOfDay? _selectedTime;
-
-  static const LatLng _fsegnLocation =
-      LatLng(36.43506845297947, 10.690172016620606);
-  final Location _locationController = Location();
+  Location _location = Location();
+  StreamSubscription<LocationData>? _locationSubscription;
   final Completer<GoogleMapController> _mapController =
       Completer<GoogleMapController>();
-  static const LatLng _pGooglePlex = LatLng(37.4223, -122.0848);
-  static const LatLng _pApplePark = LatLng(37.3346, -122.0090);
-  LatLng? _currentP = _fsegnLocation;
+  Set<Marker> _markers = {};
 
+  LatLng _currentPosition =
+      LatLng(36.43506845297947, 10.690172016620606); // Position initiale
   final TextEditingController _currentLocationController =
       TextEditingController();
 
-  bool isLoading = false;
   bool _isAccidentChecked = false;
   bool _isMalfunctionChecked = false;
   String? _selectedIssue = 'Battery failure';
+  @override
+  void initState() {
+    super.initState();
+    _fetchUserProfile();
+  }
 
-  CollectionReference users = FirebaseFirestore.instance.collection('insured');
+  Future uploadImage(String userId) async {
+    if (_image == null) {
+      print('No image selected to upload.');
+      return;
+    }
 
-  Future<String> getAddressFromLatLng(LatLng position) async {
+    String fileName = 'profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    FirebaseStorage storage = FirebaseStorage.instance;
+
     try {
-      List<Placemark> placemarks =
-          await placemarkFromCoordinates(position.latitude, position.longitude);
-      if (placemarks.isNotEmpty) {
-        Placemark place = placemarks.first;
-        String address = [
-          if (place.street != null) place.street!,
-          if (place.subLocality != null) place.subLocality!,
-          if (place.locality != null) place.locality!,
-          if (place.postalCode != null) place.postalCode!,
-          if (place.country != null) place.country!,
-        ].join(", ");
-        print(
-            "Address: $address"); // Ajoutez ceci pour voir l'adresse formatée.
-        return address;
-      } else {
-        return "No address available";
-      }
+      // Upload image to Firebase Storage
+      TaskSnapshot snapshot =
+          await storage.ref().child(fileName).putFile(_image!);
+      String downloadUrl = await snapshot.ref.getDownloadURL();
+
+      // Log the URL to check if it's retrieved successfully
+      print('Download URL: $downloadUrl');
+
+      // Store download URL in Firestore
+      await FirebaseFirestore.instance
+          .collection('userss')
+          .doc(userId)
+          .update({'image': downloadUrl});
+
+      print('Image URL updated in Firestore.');
     } catch (e) {
-      print("Failed to retrieve the address: $e");
-      return "Error retrieving address"; // Retour en cas d'erreur
+      // Log any errors that occur
+      print('Error uploading image or updating Firestore: $e');
     }
   }
 
-  confirmInfo() async {
-    final user =
-        FirebaseAuth.instance.currentUser; // Récupérer l'utilisateur actuel
-    if (user != null) {
-      // Si un utilisateur est connecté, obtenez son UID
-      String uid = user.uid;
-      CollectionReference users =
-          FirebaseFirestore.instance.collection('insured');
-      String formattedTime = _selectedTime != null
-          ? formatTimeOfDay(_selectedTime!)
-          : 'No time selected';
-      DocumentReference docRef =
-          users.doc(uid); // Récupère la référence du document
-      String documentId = docRef.id; // Récupère l'ID du document
-      return users.doc(uid).set({
-        'currentLoc': _currentLocationController.text,
-        'selectedTime': formattedTime,
-        'accident': _isAccidentChecked,
-        'malfunction': _isMalfunctionChecked,
-        'issueType': _isMalfunctionChecked ? _selectedIssue : null,
-        'insured_id': documentId
-      }).then((value) {
-        print("Information confirmed!");
-        Navigator.of(context).push(
-          MaterialPageRoute(
-              builder: (context) =>
-                  const Retrieve()), // Naviguez vers l'interface Retrieve après la confirmation
-        );
-      }).catchError((error) => print("Failed to confirm information: $error"));
-    } else {
-      // Gérer le cas où aucun utilisateur n'est connecté
-      print("No confirmed information");
-    }
+  Future getImage() async {
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+
     setState(() {
-      isLoading = false;
+      if (pickedFile != null) {
+        _image = File(pickedFile.path);
+        // Retrieve the user ID from Firebase Authentication
+        String? userId = FirebaseAuth.instance.currentUser?.uid;
+        if (userId != null) {
+          uploadImage(userId);
+        } else {
+          print('User ID is null');
+        }
+      } else {
+        print('No image selected.');
+      }
     });
+  }
+
+  Future<void> _fetchUserProfile() async {
+    User? currentUser = _auth.currentUser;
+    if (currentUser != null) {
+      print('Current User Email: ${currentUser.email}');
+      var snapshot = await _firestore
+          .collection('userss')
+          .where('email', isEqualTo: currentUser.email)
+          .where('insured', isEqualTo: true)
+          .get();
+
+      if (snapshot.docs.isNotEmpty) {
+        setState(() {
+          _userProfile = snapshot.docs.first.data();
+          print('User Profile Loaded: $_userProfile');
+        });
+      } else {
+        print('No matching user profile found in Firestore.');
+      }
+    } else {
+      print('No authenticated user found.');
+    }
+  }
+
+  Future<void> _onMapCreated(GoogleMapController controller) async {
+    _mapController.complete(controller);
+    await _startLocationUpdates();
+  }
+
+  Future<String> getAddressFromLatLng(double latitude, double longitude) async {
+    String apiKey =
+        'AIzaSyBD7dFSfZdBDi9LWAQmKjqQqyarmWw8AKM'; // Replace with your actual Google Maps API key
+    String url =
+        'https://maps.googleapis.com/maps/api/geocode/json?latlng=$latitude,$longitude&key=$apiKey';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        var data = json.decode(response.body);
+        // Assuming the response format is correct
+        if (data['results'].isNotEmpty) {
+          String address = data['results'][0]['formatted_address'];
+          return address;
+        }
+        return "No address available";
+      } else {
+        return "Failed to retrieve address";
+      }
+    } catch (e) {
+      return "Error retrieving address: $e";
+    }
+  }
+
+  Future<void> _startLocationUpdates() async {
+    bool serviceEnabled = await _location.serviceEnabled();
+    if (!serviceEnabled) {
+      serviceEnabled = await _location.requestService();
+      if (!serviceEnabled) {
+        return;
+      }
+    }
+
+    PermissionStatus permissionGranted = await _location.hasPermission();
+    if (permissionGranted == PermissionStatus.denied) {
+      permissionGranted = await _location.requestPermission();
+      if (permissionGranted != PermissionStatus.granted) {
+        return;
+      }
+    }
+
+    _locationSubscription?.cancel();
+    _locationSubscription = _location.onLocationChanged
+        .listen((LocationData currentLocation) async {
+      String address = await getAddressFromLatLng(
+          currentLocation.latitude!, currentLocation.longitude!);
+      setState(() {
+        _currentPosition =
+            LatLng(currentLocation.latitude!, currentLocation.longitude!);
+        _updateMarkers(_currentPosition);
+        _currentLocationController.text = address;
+      });
+      _updateCameraPosition(_currentPosition);
+    });
+  }
+
+  void _updateMarkers(LatLng newPosition) {
+    setState(() {
+      _markers = {
+        Marker(
+          markerId: const MarkerId("currentPosition"),
+          position: newPosition,
+          icon: BitmapDescriptor.defaultMarker,
+        ),
+      };
+    });
+  }
+
+  Future<void> _updateCameraPosition(LatLng newPosition) async {
+    final GoogleMapController controller = await _mapController.future;
+    controller.animateCamera(CameraUpdate.newCameraPosition(CameraPosition(
+      target: newPosition,
+      zoom: 15.0,
+    )));
+  }
+
+  @override
+  void dispose() {
+    _locationSubscription?.cancel();
+    _currentLocationController.dispose();
+    super.dispose();
   }
 
   void _selectTime(BuildContext context) async {
@@ -123,85 +230,81 @@ class _MyWidgetState extends State<MapPage> {
     return format.format(dt);
   }
 
-  @override
-  void dispose() {
-    _currentLocationController.dispose();
-    super.dispose();
-  }
+  void confirmInfo() async {
+    // Ici, vous pouvez ajouter votre logique pour sauvegarder les informations
+    // comme la création ou la mise à jour d'un document dans Firestore.
+    print("Confirming information...");
 
-  Future<void> _confirmDialog() async {
-    return showDialog<void>(
-      context: context,
-      barrierDismissible:
-          false, // L'utilisateur doit appuyer sur un bouton pour fermer la boîte de dialogue.
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Confirmation'),
-          content: const SingleChildScrollView(
-            child: ListBody(
-              children: <Widget>[
-                Text('Are you sure you want to confirm these informations?'),
-              ],
-            ),
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () {
-                Navigator.of(context).pop(); // Ferme la boîte de dialogue
-              },
-            ),
-            TextButton(
-              child: const Text('Yes'),
-              onPressed: () {
-                Navigator.of(context).pop(); // Ferme la boîte de dialogue
-                confirmInfo(); // Appel de la méthode pour sauvegarder les informations
-              },
-            ),
-          ],
-        );
-      },
+    // Exemple de navigation vers une autre page après confirmation.
+    // Remplacez 'RetrievePage' par le nom de votre page de destination.
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) =>
+            const Retrieve(), // Assurez-vous que la classe Retrieve est bien définie dans votre projet.
+      ),
     );
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _currentLocationController.text = 'Error retrieving address';
-    getLocationUpdates();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(title: const Text('COMAR')),
+      drawer: Drawer(
+        child: ListView(
+          children: [
+            DrawerHeader(
+              decoration: BoxDecoration(color: Colors.blue),
+              child: Column(
+                children: [
+                  Text(
+                    'User Profile',
+                    style: TextStyle(color: Colors.white, fontSize: 24),
+                  ),
+                  SizedBox(height: 10), // Space between text and avatar
+                  GestureDetector(
+                    onTap: getImage,
+                    child: CircleAvatar(
+                      backgroundImage:
+                          _image != null ? FileImage(_image!) : null,
+                      radius: 40,
+                      child: _image == null
+                          ? Icon(Icons.add_a_photo, color: Colors.white)
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (_userProfile != null) ...[
+              ListTile(
+                leading: Icon(Icons.email),
+                title: Text(_userProfile?['email'] ?? 'No email'),
+              ),
+              ListTile(
+                leading: Icon(Icons.phone),
+                title: Text(_userProfile?['phoneNumbr'] ?? 'No phone number'),
+              ),
+              ListTile(
+                leading: Icon(Icons.person),
+                title: Text(_userProfile?['username'] ?? 'No username'),
+              ),
+            ] else
+              ListTile(
+                title: Text('No user profile loaded.'),
+              ),
+          ],
+        ),
+      ),
       body: Stack(
         children: [
-          _currentP == null
-              ? const Center(
-                  child: Text("loading..."),
-                )
-              : GoogleMap(
-                  onMapCreated: ((GoogleMapController controller) =>
-                      _mapController.complete(controller)),
-                  initialCameraPosition: const CameraPosition(
-                    target: _pGooglePlex,
-                    zoom: 13,
-                  ),
-                  markers: {
-                    Marker(
-                        markerId: const MarkerId("_currentLocation"),
-                        icon: BitmapDescriptor.defaultMarker,
-                        position: _currentP!),
-                    const Marker(
-                        markerId: MarkerId("_sourceLocation"),
-                        icon: BitmapDescriptor.defaultMarker,
-                        position: _pGooglePlex),
-                    const Marker(
-                        markerId: MarkerId("_destinationLocation"),
-                        icon: BitmapDescriptor.defaultMarker,
-                        position: _pApplePark)
-                  },
-                ),
+          GoogleMap(
+            onMapCreated: _onMapCreated,
+            initialCameraPosition: CameraPosition(
+              target: _currentPosition,
+              zoom: 13.0,
+            ),
+            markers: _markers,
+          ),
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
@@ -217,48 +320,34 @@ class _MyWidgetState extends State<MapPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    TextField(
+                    TextFormField(
                       controller: _currentLocationController,
-                      readOnly: true, // Empêcher la modification manuelle
-                      textInputAction: TextInputAction.next,
-                      decoration: InputDecoration(
+                      readOnly: true,
+                      decoration: const InputDecoration(
                         labelText: 'Current Location :',
-                        focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(
-                              color: Colors.indigo[900]!), // Bordure en focus
-                        ),
-                        floatingLabelStyle:
-                            TextStyle(color: Colors.indigo[900]!),
-                        prefixIcon: const Icon(Icons.location_on),
-                        border: const OutlineInputBorder(),
+                        border: OutlineInputBorder(),
                       ),
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Please enter your location';
+                        }
+                        return null;
+                      },
                     ),
-                    const SizedBox(height: 13.0),
                     ListTile(
                       title: Text(
                           'Selected Time: ${_selectedTime?.format(context) ?? 'No time selected.'}'),
-                      trailing: Icon(Icons.keyboard_arrow_down),
                       onTap: () => _selectTime(context),
                     ),
-                    ElevatedButton(
-                      onPressed: () => _selectTime(context),
-                      child: Text('Select Time'),
-                    ),
-
-                    const SizedBox(height: 13.0),
                     CheckboxListTile(
                       title: const Text('Accident'),
                       value: _isAccidentChecked,
                       onChanged: (bool? value) {
                         setState(() {
                           _isAccidentChecked = value ?? false;
-                          if (_isAccidentChecked) {
-                            _isMalfunctionChecked = false;
-                          }
+                          _isMalfunctionChecked = !value!;
                         });
                       },
-                      activeColor: Colors.indigo[900]!,
-                      checkColor: Colors.white,
                     ),
                     CheckboxListTile(
                       title: const Text('Malfunction'),
@@ -266,18 +355,12 @@ class _MyWidgetState extends State<MapPage> {
                       onChanged: (bool? value) {
                         setState(() {
                           _isMalfunctionChecked = value ?? false;
-                          if (_isMalfunctionChecked) {
-                            _isAccidentChecked = false;
-                          }
+                          _isAccidentChecked = !value!;
                         });
                       },
-                      activeColor: Colors.indigo[900]!,
-                      checkColor: Colors.white,
                     ),
-                    const SizedBox(height: 13.0),
-                    // Afficher le DropdownButton seulement si 'Malfunction' est coché
                     if (_isMalfunctionChecked)
-                      DropdownButton<String>(
+                      DropdownButtonFormField<String>(
                         value: _selectedIssue,
                         items: <String>[
                           'Battery failure',
@@ -296,22 +379,16 @@ class _MyWidgetState extends State<MapPage> {
                             _selectedIssue = newValue;
                           });
                         },
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please select an issue';
+                          }
+                          return null;
+                        },
                       ),
-                    const SizedBox(height: 13.0),
-
                     ElevatedButton(
-                      onPressed: _confirmDialog,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            Colors.indigo[800], // Couleur de fond du bouton
-                      ),
-                      child: const Text(
-                        'Confirm Information',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold, // Rendre le texte gras
-                          color: Colors.white, // Définir la couleur du texte
-                        ),
-                      ),
+                      onPressed: confirmInfo,
+                      child: const Text('Confirm Information'),
                     ),
                   ],
                 ),
@@ -321,68 +398,5 @@ class _MyWidgetState extends State<MapPage> {
         ],
       ),
     );
-  }
-
-  Future<void> _cameraToPosition(LatLng pos) async {
-    final GoogleMapController controller = await _mapController.future;
-    CameraPosition newCameraPosition = CameraPosition(
-      target: pos,
-      zoom: 13,
-    );
-    await controller.animateCamera(
-      CameraUpdate.newCameraPosition(newCameraPosition),
-    );
-  }
-
-  Future<void> getLocationUpdates() async {
-    bool serviceEnabled;
-    PermissionStatus permissionGranted;
-
-    // Définir une localisation par défaut au lancement de l'application
-    LatLng defaultLocation = const LatLng(36.8065, 10.1815); // Exemple: Tunis
-    _cameraToPosition(
-        defaultLocation); // Positionne la carte sur la localisation par défaut
-
-    serviceEnabled = await _locationController.serviceEnabled();
-    if (!serviceEnabled) {
-      serviceEnabled = await _locationController.requestService();
-      if (!serviceEnabled) {
-        _cameraToPosition(_fsegnLocation);
-        return;
-      }
-    }
-
-    permissionGranted = await _locationController.hasPermission();
-    if (permissionGranted == PermissionStatus.denied) {
-      permissionGranted = await _locationController.requestPermission();
-      if (permissionGranted == PermissionStatus.granted) {
-        // Permission accordée, on change le texte pour simuler le succès.
-        setState(() {
-          _currentLocationController.text =
-              'Faculty of Economics and Management of Nabeul, Nabeul';
-        });
-      } else {
-        // Permission refusée, on laisse le message d'erreur.
-        setState(() {
-          _currentLocationController.text = 'Error retrieving address';
-        });
-      }
-    } else if (permissionGranted == PermissionStatus.granted) {
-      // Permission déjà accordée avant, on met directement l'adresse.
-      setState(() {
-        _currentLocationController.text =
-            'Faculty of Economics and Management of Nabeul, Nabeul';
-      });
-    }
-
-    _currentP = _fsegnLocation;
-    _cameraToPosition(_fsegnLocation);
-  }
-
-  void setDefaultLocation() {
-    setState(() {
-      _currentP = _fsegnLocation;
-      _cameraToPosition(_currentP!);
-    });
   }
 }

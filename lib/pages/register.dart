@@ -174,6 +174,24 @@ class _RegisterState extends State<Register> {
                         ),
                       ),
                       const SizedBox(height: 15.0),
+
+                      TextField(
+                        controller: emailController,
+                        keyboardType: TextInputType.text,
+                        textInputAction: TextInputAction.next,
+                        decoration: InputDecoration(
+                          labelText: 'Enter Your email : ',
+                          focusedBorder: OutlineInputBorder(
+                            borderSide: BorderSide(
+                                color: Colors.indigo[900]!), // Bordure en focus
+                          ),
+                          floatingLabelStyle:
+                              TextStyle(color: Colors.indigo[900]!),
+                          prefixIcon: const Icon(Icons.email),
+                          border: const OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 15.0),
                       //utilisation du textFormField for validation(controle de saisie)
 
                       TextField(
